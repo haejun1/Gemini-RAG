@@ -1,0 +1,21 @@
+# 환경 변수 및 보안 키 파일 (API Key 유출 방지 필수)
+.env
+
+# 파이썬 가상환경 폴더
+venv/
+env/
+ENV/
+
+# 파이썬 컴파일 및 캐시 파일
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Streamlit 및 백엔드 구동 중 생성되는 임시 파일 및 업로드 디렉토리
+temp_files/
+.streamlit/
+
+# 운영체제 생성 숨김 파일
+.DS_Store
+Thumbs.db

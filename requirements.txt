@@ -1,0 +1,17 @@
+# [UI Framework]
+streamlit
+
+# [Environment Variables]
+python-dotenv
+
+# [Google Gemini & LangChain Integration]
+google-generativeai
+langchain
+langchain-core
+langchain-community
+langchain-google-genai
+langchain-text-splitters
+
+# [Document Loader & Vector Database]
+pymupdf
+faiss-cpu
