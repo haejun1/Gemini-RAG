@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import re
-import shutil
+import hashlib
 from rag_module import RAGModule  # 백엔드 모듈 연결
 
 # 웹 페이지의 기본 틀을 설정합니다.
@@ -12,9 +12,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+def calculate_file_hash(file_bytes: bytes) -> str:
+    """파일 내용의 고유한 MD5 해시값을 계산합니다."""
+    return hashlib.md5(file_bytes).hexdigest()
+
 # 분석 모듈을 불러오고 컴퓨터 기억 장치에 임시 저장합니다.
+    # 캐시 키에 file_hash를 추가하여 파일명이 같아도 내용이 바뀌면 캐시를 갱신합니다.
 @st.cache_resource(show_spinner=False, ttl="1h")
-def load_rag_module(pdf_path: str, chunk_size: int, chunk_overlap: int, preferred_llm: str):
+def load_rag_module(pdf_path: str, file_hash: str, chunk_size: int, chunk_overlap: int, preferred_llm: str):
     """
     문서 분석 모듈을 안전하게 불러오고 오류를 처리합니다.
     """
@@ -40,7 +45,6 @@ with st.sidebar:
     # 1. 파일 업로드 영역을 사이드바 상단에 배치하여 자연스러운 진입 동선 제공
     st.subheader("📁 문서 파일 첨부")
     uploaded_file = st.file_uploader("PDF 파일을 올려주세요", type=['pdf'], label_visibility="collapsed")
-    
     st.divider()
 
     # 2. 인공지능 모델 선택 설정
@@ -91,13 +95,20 @@ if uploaded_file:
     temp_dir = "temp_files"
     os.makedirs(temp_dir, exist_ok=True)
     temp_path = os.path.join(temp_dir, uploaded_file.name)
+
+    file_bytes = uploaded_file.getvalue()
+    file_hash = calculate_file_hash(file_bytes)
     
     with open(temp_path, "wb") as f:
-        f.write(uploaded_file.getvalue())
+        f.write(file_bytes)
 
     # 백엔드 모듈을 통해 문서 분석 진행
     with st.spinner("☕ 인공지능 비서가 문서를 꼼꼼히 읽고 분석하는 중입니다. 잠시만 기다려주세요..."):
-        rag_module, error_msg = load_rag_module(temp_path, chunk_size, chunk_overlap, preferred_model)
+        rag_module, error_msg = load_rag_module(temp_path, file_hash, chunk_size, chunk_overlap, preferred_model)
+
+    # 사용 후 임시 파일 정리 (삭제)
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
 
     # 오류 발생 시 친절한 안내 메시지 출력
     if error_msg:
@@ -128,14 +139,15 @@ if uploaded_file:
         with info_col3:
             st.metric(label="참고 조각 수", value=f"{k_value}개")
     
-    # 대화 체인 생성
+    # 대화 체인 생성 및 session_state 보존
     rag_chain = rag_module.get_rag_chain(k=k_value)
+    st.session_state.rag_chain = rag_chain  # session_state에 참조 저장
 
     # 대화 내용 기록 관리
-    if "messages" not in st.session_state or st.session_state.get("last_file") != uploaded_file.name:
-        st.session_state.last_file = uploaded_file.name
+    if "messages" not in st.session_state or st.session_state.get("last_file_hash") != file_hash:
+        st.session_state.last_file_hash = file_hash
         st.session_state.messages = [
-            {"role": "assistant", "content": "안녕하세요! 업로드하신 문서를 완벽하게 숙지했습니다. 문서 내용 중 궁금한 점을 편하게 물어보세요! (예: 이 문서의 핵심 내용을 3가지로 요약해 줘)"}
+            {"role": "assistant", "content": "안녕하세요! 업로드하신 문서를 완벽하게 숙지했습니다. 문서 내용 중 궁금한 점을 편하게 물어보세요!"}
         ]
 
     # 대화 화면 출력
@@ -152,7 +164,10 @@ if uploaded_file:
         with st.chat_message("assistant"):
             with st.spinner("🤔 문서를 찾아보고 가장 정확한 답변을 정리하고 있어요..."):
                 try:
-                    response = rag_chain.invoke(user_query)
+                    response = st.session_state.rag_chain.invoke({
+                        "question": user_query,
+                        "chat_history": st.session_state.messages
+                    })
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
                 except Exception as e:

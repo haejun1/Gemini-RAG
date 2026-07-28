@@ -1,6 +1,6 @@
 import os
 import time
-from typing import List, Optional
+from typing import Optional
 from dotenv import load_dotenv
 
 import google.generativeai as genai
@@ -167,22 +167,30 @@ class RAGModule:
             batch_docs = split_documents[i:i + batch_size]
             
             max_retries = 3
+            batch_success = False
+
             for attempt in range(max_retries):
                 try:
                     if vectorstore is None:
                         vectorstore = FAISS.from_documents(documents=batch_docs, embedding=embeddings)
                     else:
                         vectorstore.add_documents(documents=batch_docs)
+                    batch_success = True
                     break
                 except Exception as e:
                     err_msg = str(e)
                     if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                        wait_time = (attempt + 1) * 12
+                        # 지수 백오프 적용 (4초, 8초, 16초...)
+                        wait_time = 4 * (2 ** attempt)
                         print(f"요청 제한 감지. {wait_time}초 후 다시 시도합니다. ({attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                     else:
                         print(f"임베딩 처리 중 오류 발생: {e}")
                         raise e
+
+            # 재시도 횟수를 초과하였음에도 성공하지 못했으면 에러를 발생시켜 조용히 누락되는 것을 막음
+            if not batch_success:
+                raise RuntimeError(f"배치 [{i // batch_size + 1}] 처리 중 임베딩 요청 제한을 극복하지 못했습니다 (429 Exceeded).")
 
             time.sleep(2.0)
 
@@ -204,6 +212,9 @@ class RAGModule:
 2. 문서에 관련 내용이 없을 경우 절대 내용을 지어내지 말고 해당 내용을 찾을 수 없다고 솔직히 답할 것.
 3. 답변은 마크다운 형식을 활용하여 가독성 있게 작성할 것.
 4. 복잡한 질문일 경우 단계를 나누어 핵심 요지를 설명할 것.
+
+#이전 대화 내용
+{chat_history}
 
 #참고 문서 내용
 {context}
