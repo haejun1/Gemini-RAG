@@ -2,7 +2,14 @@ import streamlit as st
 import os
 import re
 import hashlib
+import traceback
 from rag_module import RAGModule  # 백엔드 모듈 연결
+
+# streamlit cloud용 api-key 설정
+if "GOOGLE_API_KEY" in st.secrets:
+    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+elif "google_apikey" in st.secrets:  # 소문자 및 기타 오타 방지용 Fallback
+    os.environ["GOOGLE_API_KEY"] = st.secrets["google_apikey"]
 
 # 웹 페이지의 기본 틀을 설정합니다.
 st.set_page_config(
@@ -36,10 +43,19 @@ def load_rag_module(pdf_path: str, file_hash: str, chunk_size: int, chunk_overla
     except Exception as e:
         return None, str(e)
 
-# 사이드바 영역: 파일 업로드와 세부 설정을 하나의 흐름으로 배치하여 직관성을 높였습니다.
+# 사이드바 영역
 with st.sidebar:
     st.header("🛠️ 대화 설정 및 파일 관리")
     st.markdown("분석할 문서를 업로드하고 맞춤형 설정을 조정해 보세요.")
+    with st.expander("🩺 [개발자] 서버 진단 모니터", expanded=True):
+        api_key_check = os.getenv("GOOGLE_API_KEY")
+        if api_key_check:
+            st.success(f"🔑 API Key 연결됨 ({len(api_key_check)}자)")
+        else:
+            st.error("❌ GOOGLE_API_KEY 미설정!\nStreamlit Secrets를 확인하세요.")
+        
+        # 디버그 에러 스택 표시 여부 스위치
+        show_debug_trace = st.checkbox("🔍 상세 에러(Traceback) 표시", value=True)
     st.divider()
 
     # 1. 파일 업로드 영역을 사이드바 상단에 배치하여 자연스러운 진입 동선 제공
@@ -125,6 +141,10 @@ if uploaded_file:
             )
         else:
             st.info(f"오류 내용: {error_msg}\n\n💡 글자가 아닌 이미지로만 이루어진 PDF 파일인지 확인해 주세요.")
+
+        if 'show_debug_trace' in locals() and show_debug_trace:
+            with st.expander("🛠️ [개발자 전용] 구간 1 상세 에러 추적 로그 (Traceback)"):
+                st.code(error_msg, language="python")
         st.stop()
 
     st.success(f"🎉 '{uploaded_file.name}' 분석이 완료되었습니다! 아래에서 편하게 질문해 주세요.")
@@ -176,6 +196,9 @@ if uploaded_file:
                         st.error("⏳ 인공지능 이용량이 많아 잠시 멈췄습니다. 20초 정도 기다리신 후 다시 질문해 주세요.")
                     else:
                         st.error(f"답변을 만드는 도중 문제가 발생했습니다: {e}")
+                    if show_debug_trace:
+                        with st.expander("🛠️ [개발자 전용] 구간 2 상세 에러 추적 로그 (Traceback)"):
+                            st.code(traceback.format_exc(), language="python")
 
 else:
     st.info("👈 먼저 화면 왼쪽 메뉴의 [문서 파일 첨부] 칸에 PDF 파일을 올려주세요.")
