@@ -161,13 +161,13 @@ class RAGModule:
         embeddings = GoogleGenerativeAIEmbeddings(model=self.embedding_model_name)
 
         # 4단계: 무료 버전 요청 제한 오류를 방지하기 위해 나누어 처리합니다.
-        batch_size = 3
+        batch_size = 10
         vectorstore = None
 
         for i in range(0, len(split_documents), batch_size):
             batch_docs = split_documents[i:i + batch_size]
             
-            max_retries = 3
+            max_retries = 4
             batch_success = False
 
             for attempt in range(max_retries):
@@ -181,8 +181,8 @@ class RAGModule:
                 except Exception as e:
                     err_msg = str(e)
                     if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                        # 지수 백오프 적용 (4초, 8초, 16초...)
-                        wait_time = 4 * (2 ** attempt)
+                        # 지수 백오프 적용 (10초, 20초, 40초...)
+                        wait_time = 10 * (2 ** attempt)
                         print(f"요청 제한 감지. {wait_time}초 후 다시 시도합니다. ({attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                     else:
