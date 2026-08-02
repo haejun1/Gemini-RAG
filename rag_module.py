@@ -2,6 +2,7 @@ import os
 import time
 from typing import Optional
 from dotenv import load_dotenv
+from operator import itemgetter
 
 import google.generativeai as genai
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -203,7 +204,8 @@ class RAGModule:
         retriever = self.vectorstore.as_retriever(search_kwargs={"k": k})
 
         # 정확도와 논리적 추론을 유도하는 프롬프트 템플릿입니다.
-        template = """#명령문
+        template = """
+#명령문
 당신은 업로드된 문서를 기반으로 정확하고 깊이 있는 정보를 제공하는 문서 분석 전문 상담원입니다.
 아래의 제약 조건과 참고 문서 내용을 바탕으로 사용자 질문에 대해 차근차근 생각해 본 뒤 명확하게 답변해 주세요.
 
@@ -236,7 +238,11 @@ class RAGModule:
         )
 
         rag_chain = (
-            {"context": retriever, "question": RunnablePassthrough()}
+            {
+                "context": itemgetter("question") | retriever,
+                "question": itemgetter("question"),
+                "chat_history": itemgetter("chat_history")
+            }
             | prompt
             | llm
             | StrOutputParser()
