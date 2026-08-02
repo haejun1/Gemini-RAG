@@ -161,7 +161,7 @@ class RAGModule:
         embeddings = GoogleGenerativeAIEmbeddings(model=self.embedding_model_name)
 
         # 4단계: 무료 버전 요청 제한 오류를 방지하기 위해 나누어 처리합니다.
-        batch_size = 5
+        batch_size = 3
         vectorstore = None
 
         for i in range(0, len(split_documents), batch_size):
@@ -193,7 +193,7 @@ class RAGModule:
             if not batch_success:
                 raise RuntimeError(f"배치 [{i // batch_size + 1}] 처리 중 임베딩 요청 제한을 극복하지 못했습니다 (429 Exceeded).")
 
-            time.sleep(2.0)
+            time.sleep(6.0)
 
         return vectorstore
 
