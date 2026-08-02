@@ -53,7 +53,25 @@ with st.sidebar:
             st.success(f"🔑 API Key 연결됨 ({len(api_key_check)}자)")
         else:
             st.error("❌ GOOGLE_API_KEY 미설정!\nStreamlit Secrets를 확인하세요.")
-        
+
+        if st.button("🧪 Google API 실시간 연결 & 429 검증"):
+            import requests
+            
+            test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key_check}"
+            try:
+                res = requests.get(test_url, timeout=5)
+                st.write(f"📊 **HTTP 응답 상태 코드:** `{res.status_code}`")
+                
+                if res.status_code == 200:
+                    st.success("✅ Google API 서버와 정상 통신 중입니다. (키 유효함)")
+                elif res.status_code == 429:
+                    st.error("🚨 **429 Quota Exceeded (일일/분당 한도 초과)**")
+                    st.json(res.json())  # 상세 구글 에러 JSON 수치 출력
+                else:
+                    st.warning(f"⚠️ 기타 상태 코드: {res.status_code}")
+                    st.json(res.json())
+            except Exception as test_err:
+                st.error(f"❌ 네트워크 연결 실패: {test_err}")
         # 디버그 에러 스택 표시 여부 스위치
         show_debug_trace = st.checkbox("🔍 상세 에러(Traceback) 표시", value=True)
     st.divider()
