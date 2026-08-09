@@ -4,14 +4,22 @@ streamlit
 # [Environment Variables]
 python-dotenv
 
-# [Google Gemini & LangChain Integration]
+# [Google Gemini Native SDK & LangChain Integration]
+google-genai
 google-generativeai
 langchain
 langchain-core
 langchain-community
+langchain_classic
 langchain-google-genai
 langchain-text-splitters
 
-# [Document Loader & Vector Database]
+# [Document Loader & Hybrid Vector Database]
 pymupdf
 faiss-cpu
+rank-bm25
+Pillow
+
+# [Document Exporter (PPTX / DOCX)]
+python-pptx
+python-docx

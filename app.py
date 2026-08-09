@@ -1,40 +1,43 @@
-import streamlit as st
 import os
-import re
 import hashlib
+import gc
 import traceback
-from rag_module import RAGModule  # 백엔드 모듈 연결
+import streamlit as st
+from rag_module import RAGModule  # 백엔드 모듈 연동
+from document_exporter import create_styled_pptx, create_styled_docx
 
-# streamlit cloud용 api-key 설정
-if "GOOGLE_API_KEY" in st.secrets:
-    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-elif "google_apikey" in st.secrets:  # 소문자 및 기타 오타 방지용 Fallback
-    os.environ["GOOGLE_API_KEY"] = st.secrets["google_apikey"]
+# Streamlit Cloud 및 로컬 API 키 예외 처리
+try:
+    if "GOOGLE_API_KEY" in st.secrets:
+        os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+    elif "google_apikey" in st.secrets:
+        os.environ["GOOGLE_API_KEY"] = st.secrets["google_apikey"]
+except Exception:
+    pass
 
-# 웹 페이지의 기본 틀을 설정합니다.
+# 기본 페이지 레이아웃 세팅 (Tech-GPT 브랜드 반영)
 st.set_page_config(
-    page_title="AI 문서 분석 비서",
-    page_icon="💬",
+    page_title="Tech-GPT : 기술 문서 분석 AI 비서",
+    page_icon="💡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 def calculate_file_hash(file_bytes: bytes) -> str:
-    """파일 내용의 고유한 MD5 해시값을 계산합니다."""
+    """PDF 파일 내용 기반 고유 해시값 계산"""
     return hashlib.md5(file_bytes).hexdigest()
 
-# 분석 모듈을 불러오고 컴퓨터 기억 장치에 임시 저장합니다.
-    # 캐시 키에 file_hash를 추가하여 파일명이 같아도 내용이 바뀌면 캐시를 갱신합니다.
+# 1시간 후 메모리에서 쓰이지 않는 FAISS DB 객체 자동 파기
 @st.cache_resource(show_spinner=False, ttl="1h")
-def load_rag_module(pdf_path: str, file_hash: str, chunk_size: int, chunk_overlap: int, preferred_llm: str):
+def load_rag_module(pdf_paths: list[str], combined_hash: str, chunk_size: int, chunk_overlap: int, preferred_llm: str):
     """
-    문서 분석 모듈을 안전하게 불러오고 오류를 처리합니다.
+    다량 문서 경로 목록과 통합 파일 해시를 받아서 RAGModule을 구축합니다.
     """
     try:
-        model_arg = None if preferred_llm == "자동 선택 (추천)" else preferred_llm
+        model_arg = None if "Gemini 3.6 Flash" in preferred_llm else preferred_llm
         
         module = RAGModule(
-            pdf_path=pdf_path,
+            pdf_paths=pdf_paths,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             preferred_llm=model_arg
@@ -43,180 +46,256 @@ def load_rag_module(pdf_path: str, file_hash: str, chunk_size: int, chunk_overla
     except Exception as e:
         return None, str(e)
 
-# 사이드바 영역
+# ==========================================================================
+# 🛠️ 사이드바 제어 패널 (개선된 UI/UX)
+# ==========================================================================
 with st.sidebar:
-    st.header("🛠️ 대화 설정 및 파일 관리")
-    st.markdown("분석할 문서를 업로드하고 맞춤형 설정을 조정해 보세요.")
-    with st.expander("🩺 [개발자] 서버 진단 모니터", expanded=True):
-        api_key_check = os.getenv("GOOGLE_API_KEY")
-        if api_key_check:
-            st.success(f"🔑 API Key 연결됨 ({len(api_key_check)}자)")
-        else:
-            st.error("❌ GOOGLE_API_KEY 미설정!\nStreamlit Secrets를 확인하세요.")
-
-        if st.button("🧪 Google API 실시간 연결 & 429 검증"):
-            import requests
-            
-            test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key_check}"
-            try:
-                res = requests.get(test_url, timeout=5)
-                st.write(f"📊 **HTTP 응답 상태 코드:** `{res.status_code}`")
-                
-                if res.status_code == 200:
-                    st.success("✅ Google API 서버와 정상 통신 중입니다. (키 유효함)")
-                elif res.status_code == 429:
-                    st.error("🚨 **429 Quota Exceeded (일일/분당 한도 초과)**")
-                    st.json(res.json())  # 상세 구글 에러 JSON 수치 출력
-                else:
-                    st.warning(f"⚠️ 기타 상태 코드: {res.status_code}")
-                    st.json(res.json())
-            except Exception as test_err:
-                st.error(f"❌ 네트워크 연결 실패: {test_err}")
-        # 디버그 에러 스택 표시 여부 스위치
-        show_debug_trace = st.checkbox("🔍 상세 에러(Traceback) 표시", value=True)
+    st.title("⚙️ 스마트 설정 패널")
+    st.markdown("기술 문서 분석을 위한 AI 엔진 및 답변 양식을 조율합니다.")
     st.divider()
 
-    # 1. 파일 업로드 영역을 사이드바 상단에 배치하여 자연스러운 진입 동선 제공
-    st.subheader("📁 문서 파일 첨부")
-    uploaded_file = st.file_uploader("PDF 파일을 올려주세요", type=['pdf'], label_visibility="collapsed")
+    # 1. 파일 업로드 영역 (다중 문서 지원 및 안내 개선)
+    st.subheader("📁 기술 문서 등록")
+    uploaded_files = st.file_uploader(
+        "분석할 PDF 기술 문서를 모두 선택해 주세요 (복수 선택 가능)", 
+        type=['pdf'], 
+        accept_multiple_files=True,
+        help="Ctrl 키를 누른 상태에서 여러 문서를 한 번에 올리시거나 drag-and-drop 하실 수 있습니다."
+    )
+    st.caption("✨ **Native 멀티모달 기본 탑재:** PDF 내 텍스트뿐만 아니라 **표, 차트, 이미지**까지 자동으로 인식하여 정밀 분석합니다.")
     st.divider()
 
-    # 2. 인공지능 모델 선택 설정
-    st.subheader("🤖 인공지능 모델")
-    preferred_model = st.selectbox(
-        "사용할 모델 선택",
-        options=[
-            "자동 선택 (추천)",
-            "gemini-flash-lite-latest",
-            "gemini-2.0-flash-lite",
-            "gemini-2.0-flash",
-            "gemini-flash-latest"
-        ],
+    # 2. 모델 선택 및 동적 설명 변경 (요구사항 4 반영)
+    st.subheader("🤖 AI 분석 엔진 선택")
+    
+    model_options = {
+        "gemini-3.6-flash": "⚡ Gemini 3.6 Flash (표준 추천)",
+        "gemini-3.1-pro-preview": "🏆 Gemini 3.1 Pro (고성능 정밀추론)",
+        "gemini-3.1-flash-lite": "🚀 Gemini 3.1 Flash-Lite (초고속 경량)",
+        "gemini-flash-latest": "🔄 Gemini Flash Latest (최신 모델 자동 갱신)"
+    }
+    
+    selected_model_key = st.selectbox(
+        "AI 모델 지정",
+        options=list(model_options.keys()),
+        format_func=lambda x: model_options[x],
         index=0,
         label_visibility="collapsed"
     )
-    st.caption("✨ 자동 선택을 이용하시면 가장 안정적인 모델이 적용됩니다.")
+
+    # 선택된 모델에 따른 동적 안내 문구 제공
+    if selected_model_key == "gemini-3.6-flash":
+        st.info("💡 **엔진 안내:** 기본값으로 가장 안정적이고 속도와 정확도의 균형이 뛰어난 'Gemini 3.6 Flash' 모델이 가동됩니다.")
+    elif selected_model_key == "gemini-3.1-pro-preview":
+        st.success("💡 **엔진 안내:** 최고 성능의 'Pro' 모델이 선택되었습니다. 수식, 표, 다단 구조 특허 등 난이도 높은 기술 문서의 정밀 분석에 적합합니다.")
+    elif selected_model_key == "gemini-3.1-flash-lite":
+        st.warning("💡 **엔진 안내:** 가장 가볍고 빠른 'Lite' 모델이 선택되었습니다. 단순 요약 및 빠른 질의응답 응답성에 최적화되어 있습니다.")
+    elif selected_model_key == "gemini-flash-latest":
+        st.info("💡 **엔진 안내:** 구글의 최신 표준 업그레이드 사양이 항상 자동 적용되는 상시 최신화 모델입니다.")
     st.divider()
 
-    # 3. 문서 조각 크기 설정 (청크 크기)
-    st.subheader("📏 문서 조각 크기")
-    chunk_size = st.slider(
-        "조각 크기", 
-        min_value=300, max_value=1500, value=700, step=100,
-        label_visibility="collapsed"
+    # 3. 커스텀 프롬프트 옵션 제어 구역
+    st.subheader("🎭 답변 스타일 설정")
+
+    difficulty_level = st.radio(
+        "답변 수준 선택",
+        options=[
+            "🔬 전문가 수준 (정밀 수치/구조 중심)",
+            "🌱 비전공자 수준 (쉽고 체계적인 정리)"
+        ],
+        index=0
     )
-    st.caption("💡 문서를 나누는 단위입니다. 700에서 800 사이가 가장 자연스럽습니다.")
+
+    output_format = st.radio(
+        "출력 형태 지정",
+        options=[
+            "💬 일반 대화형 답변",
+            "📑 마크다운 보고서 (서론-본론-결론)",
+            "📊 PPT 슬라이드 발표 형식"
+        ],
+        index=0
+    )
+
+    if "PPT 슬라이드" in output_format:
+        st.info(
+            "💡 **PPT 활용 팁:** 질문할 때 *'슬라이드 4장으로 요약해줘'* 나 "
+            "*'다크모드 테마 추천도 포함해줘'* 처럼 질문창에 세부 요청을 붙이시면 더욱 정교하게 답변합니다."
+        )
     st.divider()
 
-    # 4. 문서 조각 겹침 설정 및 검색 개수
-    st.subheader("🔗 문맥 연결 및 참고 개수")
-    chunk_overlap = st.slider("조각 겹침 크기", min_value=0, max_value=300, value=100, step=20)
-    k_value = st.slider("참고할 문서 조각 수", min_value=1, max_value=6, value=3, step=1)
+    # 4. 문서 분석 목적별 사전 설정
+    st.subheader("🎯 문서 분석 목적 및 정밀도")
+    st.markdown("질문 성격에 맞게 AI가 문서를 읽는 깊이를 자동으로 조율합니다.")
+
+    analysis_mode = st.radio(
+        "분석 방식 선택",
+        options=[
+            "⚖️ 표준 기술 분석 (추천)",
+            "⚡ 빠른 단답 / 핵심 검색",
+            "📖 심층 기술 보고서 / 전체 요약"
+        ],
+        index=0
+    )
+
+    # 선택한 모드에 따른 백엔드 파라미터 매핑
+    if analysis_mode == "⚖️ 표준 기술 분석 (추천)":
+        chunk_size = 800
+        chunk_overlap = 100
+        k_value = 4
+        st.caption("🔍 **작동 모드:** 문맥을 800자 단위로 자연스럽게 읽고 관련 문서 4개를 종합 참조합니다.")
+    elif analysis_mode == "⚡ 빠른 단답 / 핵심 검색":
+        chunk_size = 400
+        chunk_overlap = 50
+        k_value = 5
+        st.caption("🔍 **작동 모드:** 특정 키워드, 수치, 담당자, 규격 정보 등 정밀한 사실 관계를 즉시 찾고 분석하는 데 최적화되어 있습니다.")
+    elif analysis_mode == "📖 심층 기술 보고서 / 전체 요약":
+        chunk_size = 1200
+        chunk_overlap = 200
+        k_value = 3
+        st.caption("🔍 **작동 모드:** 문단을 크게 묶어 전체적인 흐름, 기술 배경, 장단점 비교 등 통섭적 질의에 답변합니다.")
+
     st.divider()
 
-    # 대화 기록 초기화 버튼
-    if st.button("🧹 대화 내용 지우기", use_container_width=True):
+    # 세션 초기화 버튼
+    if st.button("🧹 대화 내역 초기화", use_container_width=True):
         st.session_state.messages = []
+        gc.collect()
         st.rerun()
 
-# 메인 화면 영역: 대화형 인터페이스 중심의 친절한 안내 제공
-st.title("💬 문서 대화형 인공지능 비서")
-st.markdown("왼쪽 메뉴에서 PDF 파일을 올리신 후, 아래 대화창에서 문서에 대해 자유롭게 물어보세요.")
+# ==========================================================================
+# 💬 메인 화면 영역 (Tech-GPT 브랜드 및 인터페이스)
+# ==========================================================================
+st.title("💡 Tech-GPT : 테크 전문가를 위한 AI 문서 분석 비서")
+st.markdown("업로드하신 **기술 사양서, 특허 문서, 연구 논문**의 내용을 정밀 분석하여 정확한 사실 기반 답변을 제공합니다.")
 
-# 파일이 업로드된 경우의 동작 흐름
-if uploaded_file:
-    # 임시 폴더에 파일 저장
+if uploaded_files:
     temp_dir = "temp_files"
     os.makedirs(temp_dir, exist_ok=True)
-    temp_path = os.path.join(temp_dir, uploaded_file.name)
-
-    file_bytes = uploaded_file.getvalue()
-    file_hash = calculate_file_hash(file_bytes)
     
-    with open(temp_path, "wb") as f:
-        f.write(file_bytes)
+    saved_temp_paths = []
+    combined_hash_str = ""
 
-    # 백엔드 모듈을 통해 문서 분석 진행
-    with st.spinner("☕ 인공지능 비서가 문서를 꼼꼼히 읽고 분석하는 중입니다. 잠시만 기다려주세요..."):
-        rag_module, error_msg = load_rag_module(temp_path, file_hash, chunk_size, chunk_overlap, preferred_model)
-
-    # 사용 후 임시 파일 정리 (삭제)
-    if os.path.exists(temp_path):
-        os.remove(temp_path)
-
-    # 오류 발생 시 친절한 안내 메시지 출력
-    if error_msg:
-        st.error("앗, 문서 분석 중에 문제가 생겼어요.")
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-            retry_match = re.search(r"retry in (\d+)", error_msg, re.IGNORECASE)
-            wait_sec = retry_match.group(1) if retry_match else "30"
+    # 다중 문서 파일 수거 및 통합 해시 생성
+    for up_file in uploaded_files:
+        t_path = os.path.join(temp_dir, up_file.name)
+        f_bytes = up_file.getvalue()
+        
+        with open(t_path, "wb") as f:
+            f.write(f_bytes)
             
-            st.warning("⏳ 무료 이용량 한도에 잠시 도달했습니다.")
-            st.info(
-                f"**해결 팁:**\n"
-                f"1. 약 {wait_sec}초 동안 잠시 숨을 고르신 후 다시 시도해 주세요.\n"
-                f"2. 왼쪽 메뉴에서 조각 크기를 1000으로 늘리시면 원활하게 작동합니다."
-            )
-        else:
-            st.info(f"오류 내용: {error_msg}\n\n💡 글자가 아닌 이미지로만 이루어진 PDF 파일인지 확인해 주세요.")
+        saved_temp_paths.append(t_path)
+        combined_hash_str += calculate_file_hash(f_bytes)
 
-        if 'show_debug_trace' in locals() and show_debug_trace:
-            with st.expander("🛠️ [개발자 전용] 구간 1 상세 에러 추적 로그 (Traceback)"):
-                st.code(error_msg, language="python")
+    final_combined_hash = hashlib.md5(combined_hash_str.encode()).hexdigest()
+
+    # RAG 파이프라인 가동
+    with st.spinner(f"⚡ {len(uploaded_files)}개 기술 문서를 지능형 지식 DB로 변환 중입니다..."):
+        rag_module, error_msg = load_rag_module(
+            saved_temp_paths, final_combined_hash, chunk_size, chunk_overlap, selected_model_key
+        )
+
+    # 임시 파일 디스크 즉시 정리
+    for path_to_del in saved_temp_paths:
+        if os.path.exists(path_to_del):
+            try:
+                os.remove(path_to_del)
+            except Exception:
+                pass
+
+    if error_msg:
+        st.error("기술 문서 분석 중 문제가 발생했습니다.")
+        st.info(f"상세 오류 원인: {error_msg}")
         st.stop()
 
-    st.success(f"🎉 '{uploaded_file.name}' 분석이 완료되었습니다! 아래에서 편하게 질문해 주세요.")
+    st.success(f"🎉 총 {len(uploaded_files)}개 기술 문서 분석이 완료되었습니다! 아래 대화창에서 자유롭게 전문 질문을 입력하세요.")
     
-    # 현재 작동 중인 시스템 정보 확인 상자
-    with st.expander("🔍 현재 적용된 인공지능 설정 확인하기", expanded=False):
-        info_col1, info_col2, info_col3 = st.columns(3)
-        with info_col1:
-            st.metric(label="사용 중인 모델", value=rag_module.llm_model_name.replace("models/", ""))
-        with info_col2:
-            st.metric(label="변환 방식", value=rag_module.embedding_model_name.replace("models/", ""))
-        with info_col3:
-            st.metric(label="참고 조각 수", value=f"{k_value}개")
+    # 시스템 작동 스펙 모니터
+    with st.expander("🔍 현재 가동 중인 Tech-GPT 엔진 정보 확인하기", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric(label="선택된 AI 모델", value=rag_module.llm_model_name.replace("models/", ""))
+        with c2:
+            st.metric(label="임베딩 파이프라인", value=rag_module.embedding_model_name.replace("models/", ""))
+        with c3:
+            st.metric(label="참조 문맥 분량(Top-K)", value=f"{k_value}개 구역")
     
-    # 대화 체인 생성 및 session_state 보존
-    rag_chain = rag_module.get_rag_chain(k=k_value)
-    st.session_state.rag_chain = rag_chain  # session_state에 참조 저장
+    rag_chain = rag_module.get_rag_chain(
+        k=k_value,
+        difficulty_level=difficulty_level,
+        output_format=output_format
+    )
+    st.session_state.rag_chain = rag_chain
 
-    # 대화 내용 기록 관리
-    if "messages" not in st.session_state or st.session_state.get("last_file_hash") != file_hash:
-        st.session_state.last_file_hash = file_hash
+    # 새 문서 묶음 업로드 시 세션 자동 초기화
+    if "messages" not in st.session_state or st.session_state.get("last_file_hash") != final_combined_hash:
+        st.session_state.last_file_hash = final_combined_hash
         st.session_state.messages = [
-            {"role": "assistant", "content": "안녕하세요! 업로드하신 문서를 완벽하게 숙지했습니다. 문서 내용 중 궁금한 점을 편하게 물어보세요!"}
+            {"role": "assistant", "content": f"안녕하세요! 등록해주신 {len(uploaded_files)}개 기술 문서 검토를 마쳤습니다. 궁금하신 기술적 내용을 물어보세요!"}
         ]
 
-    # 대화 화면 출력
+    # 대화 출력
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # 사용자 입력 및 응답 생성 처리
-    if user_query := st.chat_input("문서에 대해 궁금한 점을 입력해 주세요..."):
+    # 사용자 질문 및 답변 처리
+    if user_query := st.chat_input("기술 문서에 대해 궁금한 점을 입력하세요 (예: 본 문서의 핵심 특허 범위 요약해줘)"):
         st.session_state.messages.append({"role": "user", "content": user_query})
         with st.chat_message("user"):
             st.markdown(user_query)
 
         with st.chat_message("assistant"):
-            with st.spinner("🤔 문서를 찾아보고 가장 정확한 답변을 정리하고 있어요..."):
+            with st.spinner("🤔 등록된 기술 문서에서 하이브리드 검색으로 근거를 추적 중입니다..."):
                 try:
-                    response = st.session_state.rag_chain.invoke({
+                    # 💡 RunnableParallel 실행 결과에서 answer(답변)와 context_docs(출처 문서) 분리 수령
+                    result = st.session_state.rag_chain.invoke({
                         "question": user_query,
                         "chat_history": st.session_state.messages
                     })
-                    st.markdown(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    
+                    response_text = result["answer"]
+                    context_docs = result["context_docs"]
+
+                    # 1. 텍스트 답변 출력
+                    st.markdown(response_text)
+
+                    # 2. 답변 하단에 근거 출처 문서(Source Reference) 명시
+                    if context_docs:
+                        st.markdown("---")
+                        st.caption("📌 **[답변 근거 문서 및 출처 레퍼런스]**")
+                        sources_set = set()
+                        for doc in context_docs:
+                            src = doc.metadata.get("source_file", "알 수 없는 문서")
+                            page = doc.metadata.get("page_number", "N/A")
+                            sources_set.add(f"📄 `{src}` (Page {page})")
+                        
+                        for src_info in sorted(sources_set):
+                            st.caption(f"• {src_info}")
+
+                    if "PPT 슬라이드" in output_format:
+                        pptx_path = create_styled_pptx(response_text, "Tech_GPT_Presentation.pptx")
+                        with open(pptx_path, "rb") as f:
+                            st.download_button(
+                                label="📥 [PPTX] 발표용 슬라이드 원본 파일 다운로드",
+                                data=f,
+                                file_name="Tech_GPT_Presentation.pptx",
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                use_container_width=True
+                            )
+                    elif "마크다운 보고서" in output_format:
+                        docx_path = create_styled_docx(response_text, "Tech_GPT_Report.docx")
+                        with open(docx_path, "rb") as f:
+                            st.download_button(
+                                label="📥 [DOCX] 정식 기술 보고서 원본 파일 다운로드",
+                                data=f,
+                                file_name="Tech_GPT_Report.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True
+                            )
+
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
                 except Exception as e:
-                    err_str = str(e)
-                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        st.error("⏳ 인공지능 이용량이 많아 잠시 멈췄습니다. 20초 정도 기다리신 후 다시 질문해 주세요.")
-                    else:
-                        st.error(f"답변을 만드는 도중 문제가 발생했습니다: {e}")
-                    if show_debug_trace:
-                        with st.expander("🛠️ [개발자 전용] 구간 2 상세 에러 추적 로그 (Traceback)"):
-                            st.code(traceback.format_exc(), language="python")
+                    st.error(f"답변 생성 중 문제가 발생했습니다: {e}")
 
 else:
-    st.info("👈 먼저 화면 왼쪽 메뉴의 [문서 파일 첨부] 칸에 PDF 파일을 올려주세요.")
+    st.info("👈 먼저 좌측 사이드바의 [기술 문서 등록] 칸에 분석할 PDF 파일들을 업로드해 주세요.")
