@@ -195,7 +195,7 @@ class RAGModule:
             vectorstore = FAISS.from_documents(documents=all_split_docs, embedding=embeddings)
             # 가비지 컬렉션으로 임시 파싱 객체 메모리 즉시 정제
             gc.collect()
-            return vectorstore
+            return all_split_docs, vectorstore
         except Exception as e:
             print(f"[오류] FAISS 벡터 DB 생성 중 예외 발생: {e}")
             raise e
